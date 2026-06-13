@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create Thyself</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;1,300&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/main.css" />
+</head>
+<body>
+  <canvas id="void" aria-hidden="true"></canvas>
+  <canvas id="mycelium" aria-label="Mycelial thought network"></canvas>
+
+  <main class="thought-space">
+    <header class="thought-space__header">
+      <h1 class="thought-space__title">Create Thyself</h1>
+      <p class="thought-space__subtitle">The network is the memory · the network is the intelligence</p>
+    </header>
+
+    <p id="hint" class="hint" aria-live="polite"></p>
+
+    <footer class="thought-space__footer">
+      <span class="legend legend--self">your field</span>
+      <span class="legend legend--other">their field</span>
+      <span class="legend legend--bridge">shared filament</span>
+    </footer>
+  </main>
+
+  <script type="module" src="js/void-background.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
