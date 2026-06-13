@@ -34,7 +34,9 @@ export function FieldCanvas() {
   const [partial, setPartial] = useState("");
   const [listening, setListening] = useState(false);
   const [typing, setTyping] = useState(false);
+  const [status, setStatus] = useState("");
   const [expanded, setExpanded] = useState<ThoughtNode | null>(null);
+  const voiceBlockedRef = useRef(false);
 
   const voiceRef = useRef<Transcriber | null>(null);
   const apiRef = useRef<{
@@ -587,8 +589,19 @@ export function FieldCanvas() {
         onPartialText(t);
       },
       onFinal: (t, prosody) => crystallize(t, prosody),
-      onStateChange: (l) => setListening(l),
-      onError: () => setListening(false),
+      onStateChange: (l) => {
+        setListening(l);
+        setStatus(l ? "listening — speak your thought" : "");
+      },
+      onError: (msg) => {
+        setListening(false);
+        voiceBlockedRef.current = true;
+        setStatus(
+          msg === "mic_denied"
+            ? "microphone blocked — type instead"
+            : "voice unavailable — type instead"
+        );
+      },
     });
     voiceRef.current = voice;
 
@@ -689,22 +702,34 @@ export function FieldCanvas() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  function enterTyping() {
+    setTyping(true);
+    setStatus("type your thought, then press Enter");
+    apiRef.current?.beginCapture();
+    setTimeout(() => hiddenInputRef.current?.focus(), 0);
+  }
+
   // Orb click: toggle voice if available, otherwise open typed capture.
   async function onOrbClick() {
     if (listening) {
       voiceRef.current?.stop();
+      setStatus("");
       return;
     }
     if (typing) {
       finishTyping();
       return;
     }
+    // Once voice has failed (no mic / no access), go straight to typing.
+    if (voiceBlockedRef.current) {
+      enterTyping();
+      return;
+    }
+    setStatus("connecting…");
     const started = await voiceRef.current?.start();
     if (!started) {
-      // Fall back to typed capture.
-      setTyping(true);
-      apiRef.current?.beginCapture();
-      setTimeout(() => hiddenInputRef.current?.focus(), 0);
+      voiceBlockedRef.current = true;
+      enterTyping();
     }
   }
 
@@ -726,6 +751,7 @@ export function FieldCanvas() {
     apiRef.current?.crystallize(text);
     if (hiddenInputRef.current) hiddenInputRef.current.value = "";
     setTyping(false);
+    setStatus("");
   }
 
   return (
@@ -737,6 +763,13 @@ export function FieldCanvas() {
       {partial && (
         <div className="pointer-events-none absolute left-1/2 top-1/2 z-20 max-w-xl -translate-x-1/2 -translate-y-1/2 px-6 text-center text-[15px] font-light italic leading-relaxed text-[rgba(190,210,230,0.5)]">
           {partial}
+        </div>
+      )}
+
+      {/* Faint state cue — legible without breaking the stillness */}
+      {status && !partial && (
+        <div className="pointer-events-none absolute bottom-[5.5rem] left-1/2 z-20 -translate-x-1/2 whitespace-nowrap text-[11px] font-light italic tracking-wide text-[rgba(150,180,210,0.32)]">
+          {status}
         </div>
       )}
 
@@ -765,7 +798,7 @@ export function FieldCanvas() {
         onKeyDown={onTypeKey}
         onBlur={() => typing && finishTyping()}
         className="absolute bottom-24 left-1/2 z-30 w-[min(80vw,32rem)] -translate-x-1/2 border-0 border-b border-[rgba(150,190,220,0.2)] bg-transparent text-center text-base font-light text-[rgba(200,220,240,0.7)] outline-none placeholder:text-[rgba(150,180,210,0.25)]"
-        placeholder=""
+        placeholder="type your thought, then press Enter"
         style={{ display: typing ? "block" : "none" }}
         autoComplete="off"
       />
