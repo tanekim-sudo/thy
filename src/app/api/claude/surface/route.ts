@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getClaude, surfaceAdjustment } from "@/lib/claude";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -12,6 +13,10 @@ export const maxDuration = 60;
  * Never returns text. Most calls should return null.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  const userId = auth;
+
   const { sessionId } = await req.json();
 
   if (!getClaude()) {
@@ -19,17 +24,17 @@ export async function POST(req: NextRequest) {
   }
 
   const sessionThoughts = await prisma.thought.findMany({
-    where: sessionId ? { sessionId } : {},
+    where: sessionId ? { sessionId, userId } : { userId },
     orderBy: { timestamp: "desc" },
     take: 40,
   });
   if (sessionThoughts.length < 2) return NextResponse.json({ adjustment: null });
 
   const ids = new Set(sessionThoughts.map((t) => t.id));
-  const filaments = await prisma.filament.findMany();
+  const filaments = await prisma.filament.findMany({ where: { userId } });
   const relevant = filaments.filter((f) => ids.has(f.sourceId) || ids.has(f.targetId));
 
-  const field = await prisma.fieldState.findUnique({ where: { id: "singleton" } });
+  const field = await prisma.fieldState.findUnique({ where: { userId } });
 
   let adjustment;
   try {

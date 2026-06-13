@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,18 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  const userId = auth;
+
+  // Ensure the node belongs to the signed-in user.
+  const owned = await prisma.thought.findFirst({
+    where: { id: params.id, userId },
+  });
+  if (!owned) {
+    return NextResponse.json({ error: "not found" }, { status: 404 });
+  }
+
   const body = await req.json();
   const data: Record<string, unknown> = {};
 
@@ -18,13 +31,10 @@ export async function PATCH(
   }
 
   if (body.incrementReturn) {
-    const t = await prisma.thought.findUnique({ where: { id: params.id } });
-    if (t) {
-      data.returnCount = t.returnCount + 1;
-      // Mass grows with returns; surfacing toward the fruiting state.
-      data.mass = t.mass + 0.5;
-      if (t.returnCount + 1 >= 3) data.state = "fruiting";
-    }
+    data.returnCount = owned.returnCount + 1;
+    // Mass grows with returns; surfacing toward the fruiting state.
+    data.mass = owned.mass + 0.5;
+    if (owned.returnCount + 1 >= 3) data.state = "fruiting";
   }
 
   const updated = await prisma.thought.update({

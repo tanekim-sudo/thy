@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { computeSemantics, getClaude } from "@/lib/claude";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -12,17 +13,21 @@ export const maxDuration = 60;
  * field parameters: embedding, charge, and filaments. No content is created.
  */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  const userId = auth;
+
   const { thoughtId } = await req.json();
 
   if (!getClaude()) {
     return NextResponse.json({ skipped: "no_anthropic_key" });
   }
 
-  const thought = await prisma.thought.findUnique({ where: { id: thoughtId } });
+  const thought = await prisma.thought.findFirst({ where: { id: thoughtId, userId } });
   if (!thought) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const corpus = await prisma.thought.findMany({
-    where: { id: { not: thoughtId } },
+    where: { userId, id: { not: thoughtId } },
     orderBy: { timestamp: "desc" },
     take: 50,
   });
@@ -74,6 +79,7 @@ export async function POST(req: NextRequest) {
   ) => {
     const existing = await prisma.filament.findFirst({
       where: {
+        userId,
         OR: [
           { sourceId: thoughtId, targetId },
           { sourceId: targetId, targetId: thoughtId },
@@ -89,7 +95,7 @@ export async function POST(req: NextRequest) {
       return;
     }
     const f = await prisma.filament.create({
-      data: { sourceId: thoughtId, targetId, strength, type, traffic: 1 },
+      data: { userId, sourceId: thoughtId, targetId, strength, type, traffic: 1 },
     });
     created.push({ id: f.id, sourceId: f.sourceId, targetId: f.targetId, strength: f.strength, type: f.type });
   };

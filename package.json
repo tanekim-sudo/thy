@@ -16,6 +16,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@automerge/automerge": "^3.2.6",
     "@prisma/client": "^6.0.0",
+    "@supabase/ssr": "^0.12.0",
     "@supabase/supabase-js": "^2.108.1",
     "framer-motion": "^11.15.0",
     "next": "14.2.35",

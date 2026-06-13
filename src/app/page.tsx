@@ -1,11 +1,11 @@
 import { FieldCanvas } from "@/components/field/FieldCanvas";
-import { SupabaseProbe } from "@/components/SupabaseProbe";
+import { AccountBadge } from "@/components/AccountBadge";
 
 export default function Home() {
   return (
     <>
       <FieldCanvas />
-      <SupabaseProbe />
+      <AccountBadge />
     </>
   );
 }

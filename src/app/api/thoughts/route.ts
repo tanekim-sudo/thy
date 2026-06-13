@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-/** Load the entire field: nodes, filaments, ontology signature. */
+/** Load the signed-in user's entire field: nodes, filaments, ontology signature. */
 export async function GET() {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  const userId = auth;
+
   const [thoughts, filaments, field] = await Promise.all([
-    prisma.thought.findMany({ orderBy: { timestamp: "asc" } }),
-    prisma.filament.findMany(),
-    prisma.fieldState.findUnique({ where: { id: "singleton" } }),
+    prisma.thought.findMany({ where: { userId }, orderBy: { timestamp: "asc" } }),
+    prisma.filament.findMany({ where: { userId } }),
+    prisma.fieldState.findUnique({ where: { userId } }),
   ]);
 
   return NextResponse.json({
@@ -46,6 +51,10 @@ export async function GET() {
 
 /** Persist a newly crystallized thought. The raw text is never cleaned. */
 export async function POST(req: NextRequest) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) return auth;
+  const userId = auth;
+
   const body = await req.json();
   const {
     id,
@@ -65,7 +74,7 @@ export async function POST(req: NextRequest) {
   if (sessionId) {
     await prisma.session.upsert({
       where: { id: sessionId },
-      create: { id: sessionId },
+      create: { id: sessionId, userId },
       update: {},
     });
   }
@@ -73,6 +82,7 @@ export async function POST(req: NextRequest) {
   const thought = await prisma.thought.create({
     data: {
       ...(id ? { id } : {}),
+      userId,
       rawText,
       prosodyJson: prosody ? JSON.stringify(prosody) : null,
       posX: position?.[0] ?? 0,
@@ -89,10 +99,16 @@ export async function POST(req: NextRequest) {
 
   // Synthesis fuses two existing thoughts — wire structural filaments immediately.
   if (isSynthesis && Array.isArray(sourceThoughtIds)) {
-    for (const srcId of sourceThoughtIds) {
+    // Only link to source thoughts the user actually owns.
+    const owned = await prisma.thought.findMany({
+      where: { id: { in: sourceThoughtIds }, userId },
+      select: { id: true },
+    });
+    for (const src of owned) {
       await prisma.filament.create({
         data: {
-          sourceId: srcId,
+          userId,
+          sourceId: src.id,
           targetId: thought.id,
           strength: 0.6,
           type: "resonance",

@@ -10,14 +10,18 @@ datasource db {
 
 model Session {
   id             String   @id @default(uuid())
+  userId         String
   startedAt      DateTime @default(now())
   endedAt        DateTime?
   claudeProcessed Boolean @default(false)
   thoughts       Thought[]
+
+  @@index([userId])
 }
 
 model Thought {
   id              String   @id @default(uuid())
+  userId          String
   rawText         String
   prosodyJson     String?  // pace, pauses, confidence, trailingOff
   timestamp       DateTime @default(now())
@@ -40,10 +44,13 @@ model Thought {
   session         Session? @relation(fields: [sessionId], references: [id])
   filamentsFrom   Filament[] @relation("FilamentSource")
   filamentsTo     Filament[] @relation("FilamentTarget")
+
+  @@index([userId])
 }
 
 model Filament {
   id              String   @id @default(uuid())
+  userId          String
   sourceId        String
   targetId        String
   strength        Float    @default(0.1)
@@ -53,20 +60,26 @@ model Filament {
   traffic         Int      @default(0)
   source          Thought  @relation("FilamentSource", fields: [sourceId], references: [id], onDelete: Cascade)
   target          Thought  @relation("FilamentTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model FieldState {
-  id                  String   @id @default("singleton")
+  id                  String   @id @default(uuid())
+  userId              String   @unique
   ontologySignature   String   @default("{}")
   updatedAt           DateTime @updatedAt
 }
 
 model ClaudeJob {
   id          String   @id @default(uuid())
+  userId      String
   type        String   // semantic_memory | temporal | surfacing | identity
   status      String   @default("pending") // pending | running | done | failed
   payload     String
   result      String?
   createdAt   DateTime @default(now())
   completedAt DateTime?
+
+  @@index([userId])
 }
