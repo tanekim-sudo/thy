@@ -1,17 +1,27 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * Supabase client.
+ * Supabase client — for the shared layer only (the eventual mycelium cosmos),
+ * never the private local-first field.
  *
- * Note on the product's local-first philosophy: a user's field lives on their
- * own device (Prisma/SQLite), and spoken thoughts are transcribed locally once
- * whisper.cpp lands. Supabase is for the *shared* layer only — the eventual
- * mycelium cosmos where two fields touch — never the private field itself.
- *
- * Uses the publishable (anon) key, which is designed to be exposed in the
- * client. Row-Level Security must guard anything that touches it.
+ * Created lazily and defensively: if the NEXT_PUBLIC_SUPABASE_* env vars are
+ * absent (e.g. during a CI/Vercel build where they aren't configured), this
+ * stays null instead of throwing at import time and breaking the build. Callers
+ * must handle the null case. Uses the publishable (anon) key, which is meant to
+ * be exposed in the client — guard data with Row-Level Security.
  */
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+export const isSupabaseConfigured = Boolean(url && anonKey);
+
+let client: SupabaseClient | null = null;
+
+export function getSupabase(): SupabaseClient | null {
+  if (!isSupabaseConfigured) return null;
+  if (!client) client = createClient(url!, anonKey!);
+  return client;
+}
+
+/** Convenience handle — null when Supabase isn't configured. */
+export const supabase: SupabaseClient | null = getSupabase();

@@ -13,6 +13,10 @@ import { supabase } from "@/lib/supabase";
 export function SupabaseProbe() {
   useEffect(() => {
     (async () => {
+      if (!supabase) {
+        console.log("Supabase test: not configured (env vars missing)");
+        return;
+      }
       const { data, error } = await supabase
         .from("sync_operations")
         .select("operation_id")
