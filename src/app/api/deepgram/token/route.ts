@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -7,11 +6,11 @@ export const dynamic = "force-dynamic";
  * Mints a short-lived Deepgram key for the browser so the secret key never
  * ships to the client. Returns { key } on success, or { available: false }
  * when no Deepgram key is configured (the app falls back to typed capture).
+ *
+ * Open to guests so anyone can speak their thoughts. When a DEEPGRAM_PROJECT_ID
+ * is set the minted key is scoped + expires in 60s, which limits exposure.
  */
 export async function GET() {
-  const auth = await requireUser();
-  if (auth instanceof NextResponse) return auth;
-
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) {
     return NextResponse.json({ available: false });
