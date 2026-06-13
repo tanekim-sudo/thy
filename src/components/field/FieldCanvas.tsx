@@ -74,6 +74,8 @@ export function FieldCanvas() {
   const pendingAdjustRef = useRef<PendingAdjustment | null>(null);
   // Per-mind colour signature — every field runs a little warmer or cooler.
   const hueRef = useRef<number>(0);
+  // Whether thoughts persist to an account, or live only on this device.
+  const authedRef = useRef<boolean>(false);
 
   // Live capture thread.
   const captureRef = useRef<{
@@ -82,21 +84,6 @@ export function FieldCanvas() {
     progress: number;
     text: string;
   }>({ active: false, target: [0, 0, 0], progress: 0, text: "" });
-
-  // Derive this mind's hue signature from its user id.
-  useEffect(() => {
-    if (!isSupabaseConfigured) return;
-    try {
-      const supabase = createSupabaseBrowserClient();
-      supabase.auth.getUser().then(({ data }) => {
-        if (data.user?.id) {
-          hueRef.current = (hashStr(data.user.id) / 4294967296 - 0.5) * 0.26;
-        }
-      });
-    } catch {
-      /* not configured — neutral hue */
-    }
-  }, []);
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -633,8 +620,56 @@ export function FieldCanvas() {
     }
     window.addEventListener("resize", onResize);
 
+    // ---- Guest persistence (on-device, no account) ---------------------
+    const GUEST_KEY = "ct-guest-field-v1";
+    let guestSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+    function readGuest(): { nodes?: ThoughtNode[]; filaments?: FilamentEdge[] } | null {
+      try {
+        const raw = localStorage.getItem(GUEST_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function loadGuest() {
+      const g = readGuest();
+      if (g && Array.isArray(g.nodes)) {
+        nodesRef.current = g.nodes.map((n) => ({ ...n, crystallizing: 1 }));
+        filamentsRef.current = g.filaments || [];
+      }
+    }
+
+    function clearGuest() {
+      try {
+        localStorage.removeItem(GUEST_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function scheduleGuestSave() {
+      if (authedRef.current) return;
+      clearTimeout(guestSaveTimer);
+      guestSaveTimer = setTimeout(() => {
+        try {
+          localStorage.setItem(
+            GUEST_KEY,
+            JSON.stringify({ nodes: nodesRef.current, filaments: filamentsRef.current })
+          );
+        } catch {
+          /* storage full / unavailable — field still lives in memory */
+        }
+      }, 600);
+    }
+
     // ---- Behaviors -----------------------------------------------------
     function patchPosition(node: ThoughtNode) {
+      if (!authedRef.current) {
+        scheduleGuestSave();
+        return;
+      }
       fetch(`/api/thoughts/${node.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -653,6 +688,10 @@ export function FieldCanvas() {
           f.strength = Math.min(1, f.strength + 0.08);
           f.isActive = true;
         }
+      }
+      if (!authedRef.current) {
+        scheduleGuestSave();
+        return;
       }
       fetch(`/api/thoughts/${node.id}`, {
         method: "PATCH",
@@ -752,6 +791,10 @@ export function FieldCanvas() {
     }
 
     function persistThought(node: ThoughtNode) {
+      if (!authedRef.current) {
+        scheduleGuestSave();
+        return;
+      }
       fetch("/api/thoughts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -787,6 +830,37 @@ export function FieldCanvas() {
       };
     }
 
+    // For guests there is no Claude — kinship is inferred locally from
+    // spatial proximity so the playground field still weaves itself together.
+    function localLink(id: string) {
+      const node = nodesRef.current.find((n) => n.id === id);
+      if (!node) return;
+      node.state = "hypha";
+      const others = nodesRef.current
+        .filter((n) => n.id !== id)
+        .map((n) => ({
+          n,
+          d: Math.hypot(
+            n.position[0] - node.position[0],
+            n.position[1] - node.position[1],
+            n.position[2] - node.position[2]
+          ),
+        }))
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 2);
+      for (const { n, d } of others) {
+        if (d > 260) continue;
+        const exists = filamentsRef.current.some(
+          (f) =>
+            (f.sourceId === id && f.targetId === n.id) ||
+            (f.sourceId === n.id && f.targetId === id)
+        );
+        if (exists) continue;
+        filamentsRef.current.push(edge(id, n.id, Math.max(0.18, 0.6 - d / 500), "resonance"));
+      }
+      scheduleGuestSave();
+    }
+
     // ---- Voice (engine-agnostic; Deepgram now, whisper.cpp later) ------
     const voice = new Transcriber({
       onPartial: (t) => {
@@ -817,42 +891,47 @@ export function FieldCanvas() {
       if (idle > 4000 && unprocessedRef.current.size > 0) {
         const [id] = unprocessedRef.current;
         unprocessedRef.current.delete(id);
-        try {
-          const res = await fetch("/api/claude/semantic", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ thoughtId: id }),
-          });
-          const data = await res.json();
-          if (data.filaments) {
-            const node = nodesRef.current.find((n) => n.id === id);
-            if (node) {
-              node.charge = data.charge ?? node.charge;
-              node.embedding = data.embedding;
-              node.state = "hypha";
-            }
-            for (const f of data.filaments) {
-              if (!filamentsRef.current.find((x) => x.id === f.id)) {
-                filamentsRef.current.push({
-                  id: f.id,
-                  sourceId: f.sourceId,
-                  targetId: f.targetId,
-                  strength: f.strength,
-                  type: f.type,
-                  ageSessions: 0,
-                  isActive: true,
-                  traffic: 1,
-                  growth: 0,
-                });
+        if (!authedRef.current) {
+          // Guest field: weave connections locally, no server, no Claude.
+          localLink(id);
+        } else {
+          try {
+            const res = await fetch("/api/claude/semantic", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ thoughtId: id }),
+            });
+            const data = await res.json();
+            if (data.filaments) {
+              const node = nodesRef.current.find((n) => n.id === id);
+              if (node) {
+                node.charge = data.charge ?? node.charge;
+                node.embedding = data.embedding;
+                node.state = "hypha";
+              }
+              for (const f of data.filaments) {
+                if (!filamentsRef.current.find((x) => x.id === f.id)) {
+                  filamentsRef.current.push({
+                    id: f.id,
+                    sourceId: f.sourceId,
+                    targetId: f.targetId,
+                    strength: f.strength,
+                    type: f.type,
+                    ageSessions: 0,
+                    isActive: true,
+                    traffic: 1,
+                    growth: 0,
+                  });
+                }
               }
             }
+          } catch {
+            /* field continues with last-known parameters */
           }
-        } catch {
-          /* field continues with last-known parameters */
         }
       }
 
-      if (idle > 90000 && !pendingAdjustRef.current && unprocessedRef.current.size === 0) {
+      if (authedRef.current && idle > 90000 && !pendingAdjustRef.current && unprocessedRef.current.size === 0) {
         lastActivityRef.current = Date.now();
         try {
           const res = await fetch("/api/claude/surface", {
@@ -870,22 +949,62 @@ export function FieldCanvas() {
       }
     }, 1500);
 
-    // ---- Load existing field ------------------------------------------
-    fetch("/api/thoughts")
-      .then((r) => {
-        if (r.status === 401) {
-          window.location.href = "/login";
-          return null;
+    // ---- Resolve identity, then load the right field -------------------
+    (async () => {
+      let authed = false;
+      if (isSupabaseConfigured) {
+        try {
+          const sb = createSupabaseBrowserClient();
+          const { data } = await sb.auth.getUser();
+          if (data.user?.id) {
+            authed = true;
+            hueRef.current = (hashStr(data.user.id) / 4294967296 - 0.5) * 0.26;
+          }
+        } catch {
+          /* treat as guest */
         }
-        return r.json();
-      })
-      .then((data) => {
-        if (data && Array.isArray(data.nodes)) {
-          nodesRef.current = data.nodes.map((n: ThoughtNode) => ({ ...n, crystallizing: 1 }));
+      }
+      authedRef.current = authed;
+
+      if (!authed) {
+        loadGuest();
+        return;
+      }
+
+      try {
+        const r = await fetch("/api/thoughts");
+        if (r.status === 401) {
+          authedRef.current = false;
+          loadGuest();
+          return;
+        }
+        const data = await r.json();
+        const accountNodes: ThoughtNode[] = Array.isArray(data.nodes) ? data.nodes : [];
+        const guest = readGuest();
+
+        if (
+          accountNodes.length === 0 &&
+          guest &&
+          Array.isArray(guest.nodes) &&
+          guest.nodes.length > 0
+        ) {
+          // First sign-in carrying a guest playground — adopt it into the account.
+          nodesRef.current = guest.nodes.map((n) => ({ ...n, crystallizing: 1 }));
+          filamentsRef.current = guest.filaments || [];
+          for (const n of nodesRef.current) {
+            persistThought(n);
+            // Let Claude weave the real semantic filaments for migrated thoughts.
+            if (!n.isSynthesis) unprocessedRef.current.add(n.id);
+          }
+          clearGuest();
+        } else {
+          nodesRef.current = accountNodes.map((n) => ({ ...n, crystallizing: 1 }));
           filamentsRef.current = data.filaments || [];
         }
-      })
-      .catch(() => {});
+      } catch {
+        /* network hiccup — field starts empty and recovers on next interaction */
+      }
+    })();
 
     apiRef.current = {
       beginCapture,
@@ -896,6 +1015,7 @@ export function FieldCanvas() {
     return () => {
       cancelAnimationFrame(raf);
       clearInterval(idleTimer);
+      clearTimeout(guestSaveTimer);
       voice.stop();
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("pointermove", onPointerMove);

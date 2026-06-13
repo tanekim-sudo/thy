@@ -1,11 +1,11 @@
 import { FieldCanvas } from "@/components/field/FieldCanvas";
-import { AccountBadge } from "@/components/AccountBadge";
+import { AccountBar } from "@/components/AccountBar";
 
 export default function Home() {
   return (
     <>
       <FieldCanvas />
-      <AccountBadge />
+      <AccountBar />
     </>
   );
 }

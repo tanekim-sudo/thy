@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 
@@ -11,7 +12,9 @@ function LoginForm() {
   const params = useSearchParams();
   const next = params.get("next") || "/";
 
-  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [mode, setMode] = useState<"signin" | "signup">(
+    params.get("mode") === "signup" ? "signup" : "signin"
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -132,6 +135,13 @@ function LoginForm() {
             ? "no field yet — create one"
             : "already have a field — sign in"}
         </button>
+
+        <Link
+          href="/"
+          className="mt-4 text-[11px] font-light italic tracking-wide text-[rgba(150,180,210,0.28)] underline-offset-4 transition-colors hover:text-[rgba(180,205,230,0.5)]"
+        >
+          keep exploring as a guest
+        </Link>
       </div>
     </div>
   );
