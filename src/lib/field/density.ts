@@ -83,8 +83,43 @@ export class DensityField {
     return Math.max(0.08, Math.min(1, raw / this.maxDensity));
   }
 
-  /** Raw grid for future Part 7 heatmap overlay. */
+  /** Raw grid for Part 7 heatmap overlay. */
   getGrid(): { data: Float32Array; cols: number; rows: number; max: number } {
     return { data: this.grid, cols: this.cols, rows: this.rows, max: this.maxDensity };
+  }
+
+  /** World-space bounds of the density grid. */
+  getBounds(): { minX: number; minY: number; width: number; height: number } {
+    return {
+      minX: this.originX,
+      minY: this.originY,
+      width: this.cols * this.cell,
+      height: this.rows * this.cell,
+    };
+  }
+
+  /** Soft structural-light heatmap for zoomed-out density read. */
+  rasterizeHeatmap(): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = this.cols;
+    canvas.height = this.rows;
+    const ctx = canvas.getContext("2d")!;
+    const img = ctx.createImageData(this.cols, this.rows);
+    const d = img.data;
+    const inv = 1 / this.maxDensity;
+
+    for (let y = 0; y < this.rows; y++) {
+      for (let x = 0; x < this.cols; x++) {
+        const v = this.grid[y * this.cols + x] * inv;
+        const t = Math.pow(Math.min(1, v), 0.62);
+        const i = (y * this.cols + x) * 4;
+        d[i] = 201;
+        d[i + 1] = 222;
+        d[i + 2] = 240;
+        d[i + 3] = Math.floor(t * 72);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas;
   }
 }

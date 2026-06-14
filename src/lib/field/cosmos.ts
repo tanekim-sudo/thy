@@ -1,8 +1,8 @@
 import type { CosmosResonance, CosmosSession } from "@/lib/types";
 
-export const COSMOS_FILAMENT_OPACITY = 0.15;
+export const COSMOS_FILAMENT_OPACITY = 0.18;
 /** LOD at which inter-session filaments and session points begin to appear. */
-export const COSMOS_LOD_START = 0.55;
+export const COSMOS_LOD_START = 0.48;
 
 interface SnapPoint {
   x: number;

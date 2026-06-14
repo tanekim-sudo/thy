@@ -253,7 +253,7 @@ export function PageView({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center transition-opacity duration-[1800ms]"
+      className="fixed inset-0 z-[110] flex items-center justify-center transition-opacity duration-[1800ms]"
       style={{ opacity: revealed ? 1 : 0, background: "rgba(5,6,12,0.92)" }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();

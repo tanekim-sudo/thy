@@ -44,7 +44,7 @@ export function onFieldEvent(
   return () => window.removeEventListener(`ct:${name}`, fn);
 }
 
-export const ONBOARDING_KEY = "ct-onboarding-complete-v2";
+export const ONBOARDING_KEY = "ct-onboarding-complete-v3";
 
 export function isOnboardingComplete(): boolean {
   try {

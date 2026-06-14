@@ -42,7 +42,7 @@ export function AccountBar() {
   if (!ready) return null;
 
   return (
-    <div className="fixed right-5 top-4 z-40 flex items-center gap-4 text-[12px] font-light tracking-wide">
+    <div className="fixed right-5 top-4 z-[120] flex items-center gap-4 text-[12px] font-light tracking-wide">
       {email ? (
         <>
           <span className="hidden text-[rgba(150,180,210,0.4)] sm:inline">{email}</span>

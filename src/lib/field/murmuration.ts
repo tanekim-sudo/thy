@@ -1,7 +1,13 @@
 import type { FilamentEdge, ThoughtNode } from "@/lib/types";
+import {
+  buildMetaballGrid,
+  marchingSquaresContour,
+  rasterizeMetaballFill,
+  type MetaballPoint,
+} from "@/lib/field/metaball";
 
-export const MURMURATION_LOD_START = 0.38;
-export const MURMURATION_LOD_FULL = 0.82;
+export const MURMURATION_LOD_START = 0.32;
+export const MURMURATION_LOD_FULL = 0.78;
 
 export type BirdRole = "user" | "ai_peripheral";
 
@@ -19,6 +25,7 @@ export interface ClusterState {
   memberIds: string[];
   centroid: [number, number];
   avgVelocity: [number, number];
+  spread: number;
   coherence: number;
   alignment: number;
   resolving: boolean;
@@ -28,19 +35,27 @@ export interface ClusterState {
   driftToward: [number, number] | null;
 }
 
+export interface ClusterVisualData {
+  contour: Float32Array;
+  fillCanvas: HTMLCanvasElement;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  threshold: number;
+}
+
 export interface MurmurWave {
   clusterId: string;
   until: number;
   intensity: number;
 }
 
-const COHESION = 0.00042;
-const ALIGN = 0.018;
-const SEPARATION = 0.0018;
-const ANCHOR = 0.0032;
-const MAX_SPEED = 2.8;
-const AI_ALIGN_BOOST = 1.45;
-const AI_SPEED_BOOST = 1.35;
+const COHESION = 0.0011;
+const ALIGN = 0.042;
+const SEPARATION = 0.0048;
+const ANCHOR = 0.008;
+const MAX_SPEED = 5.5;
+const AI_ALIGN_BOOST = 1.55;
+const AI_SPEED_BOOST = 1.5;
+const WANDER = 0.018;
 
 function birdRole(node: ThoughtNode): BirdRole {
   if (
@@ -61,8 +76,9 @@ export function murmurationVisibility(lod: number): number {
 }
 
 export function silhouetteThreshold(avgStrength: number, resolving: boolean): number {
-  const base = 0.1 + avgStrength * 0.38;
-  return resolving ? base + 0.14 : base;
+  const norm = avgStrength * 0.55 + 0.08;
+  const base = norm * 0.42;
+  return resolving ? base + 0.12 : base;
 }
 
 export function detectClusters(
@@ -85,7 +101,7 @@ export function detectClusters(
 
   const adj = new Map<string, Set<string>>();
   for (const f of filaments) {
-    if (f.strength < 0.22) continue;
+    if (f.strength < 0.18) continue;
     if (!nodeIds.has(f.sourceId) || !nodeIds.has(f.targetId)) continue;
     if (!adj.has(f.sourceId)) adj.set(f.sourceId, new Set());
     if (!adj.has(f.targetId)) adj.set(f.targetId, new Set());
@@ -108,10 +124,26 @@ export function detectClusters(
         }
       }
     }
-    if (comp.length >= 3) clusters.push(comp);
+    if (comp.length >= minSize) clusters.push(comp);
   }
 
-  return clusters.slice(0, 8);
+  // Proximity fallback — fragments near each other with no filament yet.
+  for (const n of nodes) {
+    if (assigned.has(n.id)) continue;
+    const near = nodes.filter(
+      (o) =>
+        o.id !== n.id &&
+        !assigned.has(o.id) &&
+        Math.hypot(o.position[0] - n.position[0], o.position[1] - n.position[1]) < 140
+    );
+    if (near.length >= 1) {
+      const group = [n.id, near[0].id];
+      clusters.push(group);
+      group.forEach((id) => assigned.add(id));
+    }
+  }
+
+  return clusters.slice(0, 10);
 }
 
 function avgInternalStrength(memberIds: string[], filaments: FilamentEdge[]): number {
@@ -123,7 +155,27 @@ function avgInternalStrength(memberIds: string[], filaments: FilamentEdge[]): nu
     sum += f.strength;
     c++;
   }
-  return c ? sum / c : 0.15;
+  return c ? sum / c : 0.12;
+}
+
+function clusterSpread(memberIds: string[], nodes: ThoughtNode[]): number {
+  let cx = 0;
+  let cy = 0;
+  for (const id of memberIds) {
+    const n = nodes.find((x) => x.id === id);
+    if (n) {
+      cx += n.position[0];
+      cy += n.position[1];
+    }
+  }
+  cx /= memberIds.length;
+  cy /= memberIds.length;
+  let maxD = 40;
+  for (const id of memberIds) {
+    const n = nodes.find((x) => x.id === id);
+    if (n) maxD = Math.max(maxD, Math.hypot(n.position[0] - cx, n.position[1] - cy));
+  }
+  return maxD;
 }
 
 function clusterDriftTarget(
@@ -176,6 +228,14 @@ export class MurmurationField {
   triggerMurmurForMembers(memberIds: string[]) {
     const id = memberIds.slice().sort().join(",");
     this.triggerMurmur(id, 1800, 1);
+    for (const cid of memberIds) {
+      for (const cl of this.clusters) {
+        if (cl.memberIds.includes(cid)) {
+          cl.murmurUntil = performance.now() + 1800;
+          cl.murmurIntensity = 1;
+        }
+      }
+    }
   }
 
   update(
@@ -205,11 +265,13 @@ export class MurmurationField {
       }
       const centroid: [number, number] = c ? [cx / c, cy / c] : [0, 0];
       const coherence = avgInternalStrength(memberIds, filaments);
+      const spread = clusterSpread(memberIds, nodes);
       const murmur = this.murmurs.find((m) => m.clusterId === id);
       return {
         id,
         memberIds,
         centroid,
+        spread,
         avgVelocity: old?.avgVelocity ?? [0, 0],
         coherence,
         alignment: old?.alignment ?? 0,
@@ -230,16 +292,26 @@ export class MurmurationField {
         .filter((n): n is ThoughtNode => Boolean(n));
       if (members.length === 0) continue;
 
+      const sepR = Math.max(35, cluster.spread * 0.55);
+      const maxOff = Math.max(28, cluster.spread * 0.85);
       let avgVx = 0;
       let avgVy = 0;
       const murmurActive = cluster.murmurUntil > now;
-      const murmurBoost = murmurActive ? 1 + cluster.murmurIntensity * 0.55 : 1;
+      const murmurBoost = murmurActive ? 1 + cluster.murmurIntensity * 0.85 : 1;
+      const wanderPhase = now * 0.001 + cluster.id.length;
 
       for (const node of members) {
         seenBirds.add(node.id);
         let bird = this.birds.get(node.id);
         if (!bird) {
-          bird = { fragmentId: node.id, role: birdRole(node), ox: 0, oy: 0, vx: 0, vy: 0 };
+          bird = {
+            fragmentId: node.id,
+            role: birdRole(node),
+            ox: (Math.random() - 0.5) * 8,
+            oy: (Math.random() - 0.5) * 8,
+            vx: 0,
+            vy: 0,
+          };
           this.birds.set(node.id, bird);
         } else {
           bird.role = birdRole(node);
@@ -248,20 +320,22 @@ export class MurmurationField {
         const roleMul = bird.role === "ai_peripheral" ? AI_SPEED_BOOST : 1;
         let fx = 0;
         let fy = 0;
+        const px = node.position[0] + bird.ox;
+        const py = node.position[1] + bird.oy;
 
-        fx += (cluster.centroid[0] - (node.position[0] + bird.ox)) * COHESION;
-        fy += (cluster.centroid[1] - (node.position[1] + bird.oy)) * COHESION;
+        fx += (cluster.centroid[0] - px) * COHESION;
+        fy += (cluster.centroid[1] - py) * COHESION;
         fx += cluster.avgVelocity[0] * ALIGN * (bird.role === "ai_peripheral" ? AI_ALIGN_BOOST : 1);
         fy += cluster.avgVelocity[1] * ALIGN * (bird.role === "ai_peripheral" ? AI_ALIGN_BOOST : 1);
 
         for (const other of members) {
           if (other.id === node.id) continue;
           const ob = this.birds.get(other.id);
-          const dx = node.position[0] + bird.ox - (other.position[0] + (ob?.ox ?? 0));
-          const dy = node.position[1] + bird.oy - (other.position[1] + (ob?.oy ?? 0));
+          const dx = px - (other.position[0] + (ob?.ox ?? 0));
+          const dy = py - (other.position[1] + (ob?.oy ?? 0));
           const d = Math.hypot(dx, dy) || 1;
-          if (d < 55) {
-            const push = SEPARATION * (1 - d / 55);
+          if (d < sepR) {
+            const push = SEPARATION * (1 - d / sepR);
             fx += (dx / d) * push;
             fy += (dy / d) * push;
           }
@@ -271,17 +345,20 @@ export class MurmurationField {
         fy -= bird.oy * ANCHOR;
 
         if (cluster.driftToward) {
-          fx += (cluster.driftToward[0] - cluster.centroid[0]) * 0.00008;
-          fy += (cluster.driftToward[1] - cluster.centroid[1]) * 0.00008;
+          fx += (cluster.driftToward[0] - cluster.centroid[0]) * 0.00022;
+          fy += (cluster.driftToward[1] - cluster.centroid[1]) * 0.00022;
         }
+
+        fx += Math.sin(wanderPhase + node.position[0] * 0.02) * WANDER;
+        fy += Math.cos(wanderPhase * 1.3 + node.position[1] * 0.02) * WANDER;
 
         if (murmurActive) {
-          fx += (Math.random() - 0.5) * 0.04 * cluster.murmurIntensity;
-          fy += (Math.random() - 0.5) * 0.04 * cluster.murmurIntensity;
+          fx += (Math.random() - 0.5) * 0.12 * cluster.murmurIntensity;
+          fy += (Math.random() - 0.5) * 0.12 * cluster.murmurIntensity;
         }
 
-        bird.vx = (bird.vx + fx * dt * roleMul * murmurBoost) * 0.9;
-        bird.vy = (bird.vy + fy * dt * roleMul * murmurBoost) * 0.9;
+        bird.vx = (bird.vx + fx * dt * roleMul * murmurBoost) * 0.88;
+        bird.vy = (bird.vy + fy * dt * roleMul * murmurBoost) * 0.88;
         const sp = Math.hypot(bird.vx, bird.vy);
         const max = MAX_SPEED * roleMul * murmurBoost;
         if (sp > max) {
@@ -290,14 +367,16 @@ export class MurmurationField {
         }
         bird.ox += bird.vx * dt;
         bird.oy += bird.vy * dt;
+        bird.ox = Math.max(-maxOff, Math.min(maxOff, bird.ox));
+        bird.oy = Math.max(-maxOff, Math.min(maxOff, bird.oy));
         avgVx += bird.vx;
         avgVy += bird.vy;
       }
 
       avgVx /= members.length;
       avgVy /= members.length;
-      cluster.avgVelocity[0] = cluster.avgVelocity[0] * 0.94 + avgVx * 0.06;
-      cluster.avgVelocity[1] = cluster.avgVelocity[1] * 0.94 + avgVy * 0.06;
+      cluster.avgVelocity[0] = cluster.avgVelocity[0] * 0.92 + avgVx * 0.08;
+      cluster.avgVelocity[1] = cluster.avgVelocity[1] * 0.92 + avgVy * 0.08;
 
       let varSum = 0;
       for (const node of members) {
@@ -305,12 +384,12 @@ export class MurmurationField {
         varSum += (b.vx - avgVx) ** 2 + (b.vy - avgVy) ** 2;
       }
       const variance = varSum / (members.length * 2);
-      cluster.alignment = Math.max(0, Math.min(1, 1 - variance / 1.8));
+      cluster.alignment = Math.max(0, Math.min(1, 1 - variance / 2.4));
 
-      if (cluster.alignment > 0.78 && members.length >= 3) {
+      if (cluster.alignment > 0.72 && members.length >= 2) {
         if (!cluster.resolving) {
           cluster.resolving = true;
-          cluster.resolveUntil = now + 700 + Math.random() * 400;
+          cluster.resolveUntil = now + 600 + Math.random() * 500;
         }
       }
       if (cluster.resolving && now > cluster.resolveUntil) {
@@ -323,94 +402,52 @@ export class MurmurationField {
     }
   }
 
-  birdPositions(cluster: ClusterState, nodes: ThoughtNode[]): { x: number; y: number; role: BirdRole }[] {
-    const out: { x: number; y: number; role: BirdRole }[] = [];
+  birdPositions(
+    cluster: ClusterState,
+    nodes: ThoughtNode[]
+  ): { x: number; y: number; role: BirdRole; weight: number }[] {
+    const out: { x: number; y: number; role: BirdRole; weight: number }[] = [];
     for (const id of cluster.memberIds) {
       const n = nodes.find((x) => x.id === id);
       const b = this.birds.get(id);
       if (!n || !b) continue;
-      out.push({ x: n.position[0] + b.ox, y: n.position[1] + b.oy, role: b.role });
+      const w =
+        b.role === "ai_peripheral"
+          ? 0.55 + n.luminosity * 0.25
+          : 0.75 + Math.sqrt(n.mass) * 0.2 + n.luminosity * 0.15;
+      out.push({
+        x: n.position[0] + b.ox,
+        y: n.position[1] + b.oy,
+        role: b.role,
+        weight: w,
+      });
     }
     return out;
   }
 
-  buildSilhouetteContour(
-    cluster: ClusterState,
-    nodes: ThoughtNode[],
-    cols = 28,
-    rows = 22
-  ): { points: Float32Array; threshold: number } | null {
+  buildClusterVisual(cluster: ClusterState, nodes: ThoughtNode[]): ClusterVisualData | null {
     const birds = this.birdPositions(cluster, nodes);
     if (birds.length < 2) return null;
 
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const b of birds) {
-      minX = Math.min(minX, b.x);
-      minY = Math.min(minY, b.y);
-      maxX = Math.max(maxX, b.x);
-      maxY = Math.max(maxY, b.y);
-    }
-    const pad = 70;
-    minX -= pad;
-    minY -= pad;
-    maxX += pad;
-    maxY += pad;
-    const cellW = (maxX - minX) / (cols - 1);
-    const cellH = (maxY - minY) / (rows - 1);
-    const grid = new Float32Array(cols * rows);
-    const sigma = 1.6;
+    const points: MetaballPoint[] = birds.map((b) => ({ x: b.x, y: b.y, weight: b.weight }));
+    const grid = buildMetaballGrid(points, 44, 32, 90, 2.4);
+    if (!grid) return null;
 
-    for (const b of birds) {
-      const w = b.role === "ai_peripheral" ? 0.65 : 1;
-      const cx = (b.x - minX) / cellW;
-      const cy = (b.y - minY) / cellH;
-      const r = 3;
-      for (let y = Math.max(0, Math.floor(cy - r)); y <= Math.min(rows - 1, Math.ceil(cy + r)); y++) {
-        for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(cols - 1, Math.ceil(cx + r)); x++) {
-          const dx = x - cx;
-          const dy = y - cy;
-          grid[y * cols + x] += w * Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
-        }
-      }
-    }
+    const threshold = silhouetteThreshold(cluster.coherence, cluster.resolving) * grid.maxVal;
+    const contour = marchingSquaresContour(grid, threshold);
+    const { canvas: fillCanvas } = rasterizeMetaballFill(grid, threshold, 0.42);
 
-    const threshold = silhouetteThreshold(cluster.coherence, cluster.resolving);
-    const segments: number[] = [];
-
-    const sample = (x: number, y: number) => {
-      if (x < 0 || y < 0 || x >= cols || y >= rows) return 0;
-      return grid[y * cols + x];
+    return {
+      contour,
+      fillCanvas,
+      bounds: {
+        minX: grid.minX,
+        minY: grid.minY,
+        maxX: grid.minX + grid.cellW * (grid.cols - 1),
+        maxY: grid.minY + grid.cellH * (grid.rows - 1),
+      },
+      threshold,
     };
-
-    const toWorld = (gx: number, gy: number) => {
-      segments.push(minX + gx * cellW, minY + gy * cellH, -20);
-    };
-
-    for (let y = 0; y < rows - 1; y++) {
-      for (let x = 0; x < cols - 1; x++) {
-        const v0 = sample(x, y) >= threshold ? 1 : 0;
-        const v1 = sample(x + 1, y) >= threshold ? 1 : 0;
-        const v2 = sample(x + 1, y + 1) >= threshold ? 1 : 0;
-        const v3 = sample(x, y + 1) >= threshold ? 1 : 0;
-        const idx = v0 | (v1 << 1) | (v2 << 2) | (v3 << 3);
-        if (idx === 0 || idx === 15) continue;
-        const mx = x + 0.5;
-        const my = y + 0.5;
-        if (idx === 5 || idx === 10) {
-          toWorld(mx, y);
-          toWorld(mx, y + 1);
-        } else {
-          toWorld(x, my);
-          toWorld(x + 1, my);
-        }
-      }
-    }
-
-    if (segments.length < 6) return null;
-    return { points: new Float32Array(segments), threshold };
   }
 }
 

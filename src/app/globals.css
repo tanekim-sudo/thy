@@ -103,8 +103,15 @@ body::after {
 .onboarding-dim {
   position: fixed;
   inset: 0;
-  background: rgba(4, 5, 10, 0.72);
-  backdrop-filter: blur(1px);
+  background: rgba(4, 5, 10, 0.55);
+  backdrop-filter: blur(0.5px);
+  pointer-events: none;
+}
+
+/* Pulse the orb during tour orb steps */
+body.ct-tour-active .orb-pulse {
+  animation: orb-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 28px 12px rgba(140, 200, 255, 0.55);
 }
 
 .onboarding-spotlight-orb {

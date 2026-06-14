@@ -46,6 +46,7 @@ import { nodesInLasso, traceNearPath } from "@/lib/field/selection";
 import { openGlyphCurve, parseGlyph, serializeGlyph } from "@/lib/field/glyphs";
 import { PageView } from "@/components/field/PageView";
 import { emitFieldEvent } from "@/lib/field-events";
+import { mergeBuiltinTools } from "@/lib/field/builtin-tools";
 import {
   localBranchSeeds,
   localExecuteOutputs,
@@ -123,7 +124,7 @@ export function FieldCanvas() {
   const [expanded, setExpanded] = useState<ThoughtNode | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [pageDraft, setPageDraft] = useState<DraftDoc | null>(null);
-  const [tools, setTools] = useState<UserTool[]>([]);
+  const [tools, setTools] = useState<UserTool[]>(() => mergeBuiltinTools([]));
   const [threadAvgPos, setThreadAvgPos] = useState<[number, number]>([0, 0]);
   const voiceBlockedRef = useRef(false);
 
@@ -360,7 +361,34 @@ export function FieldCanvas() {
       scene.add(s);
       birdSprites.push(s);
     }
-    const silhouetteLines = new Map<string, THREE.Line>();
+    const silhouetteLines = new Map<string, THREE.LineSegments>();
+    const silhouetteFills = new Map<
+      string,
+      { mesh: THREE.Mesh; texture: THREE.CanvasTexture }
+    >();
+
+    const heatBounds = densityField.getBounds();
+    const heatTex = new THREE.CanvasTexture(document.createElement("canvas"));
+    heatTex.minFilter = THREE.LinearFilter;
+    heatTex.magFilter = THREE.LinearFilter;
+    const heatmapMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(heatBounds.width, heatBounds.height),
+      new THREE.MeshBasicMaterial({
+        map: heatTex,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    heatmapMesh.position.set(
+      heatBounds.minX + heatBounds.width / 2,
+      heatBounds.minY + heatBounds.height / 2,
+      -24
+    );
+    heatmapMesh.renderOrder = -3;
+    heatmapMesh.frustumCulled = false;
+    scene.add(heatmapMesh);
 
     const trail: { pos: THREE.Vector3; born: number }[] = [];
     const trailSprites: THREE.Sprite[] = [];
@@ -727,12 +755,13 @@ export function FieldCanvas() {
       if (selectedIds.size === 0) return;
       arrivedGlyphs.length = 0;
       const cen = selectionCentroidScreen();
-      const ranked = [...userTools]
+      const effectiveTools = mergeBuiltinTools(userTools);
+      const ranked = [...effectiveTools]
         .filter((t) => t.builtinKind !== "reflect")
         .sort((a, b) => b.mass - a.mass || b.lastUsedAt - a.lastUsedAt);
       const picks: { id: string; instruction: string; glyphPath?: string; isReflect?: boolean; isOpen?: boolean }[] = [];
       if (selectedIds.size === 1) {
-        const branch = userTools.find((t) => t.builtinKind === "branch");
+        const branch = effectiveTools.find((t) => t.builtinKind === "branch");
         if (branch) picks.push({ id: branch.id, instruction: branch.instruction, glyphPath: branch.glyphPath });
       }
       for (const t of ranked.slice(0, 3)) {
@@ -740,7 +769,7 @@ export function FieldCanvas() {
           picks.push({ id: t.id, instruction: t.instruction, glyphPath: t.glyphPath });
         }
       }
-      const reflect = userTools.find((t) => t.builtinKind === "reflect");
+      const reflect = effectiveTools.find((t) => t.builtinKind === "reflect");
       if (reflect) picks.push({ id: "reflect", instruction: reflect.instruction, isReflect: true });
       picks.push({ id: "create", instruction: "", isOpen: true });
 
@@ -876,7 +905,7 @@ export function FieldCanvas() {
         }
         return;
       }
-      const tool = userTools.find((t) => t.id === g.toolId);
+      const tool = mergeBuiltinTools(userTools).find((t) => t.id === g.toolId);
       if (g.isReflect || tool?.builtinKind === "reflect") {
         await runReflectionOnSelection();
         dismissWorkbench();
@@ -1309,6 +1338,21 @@ export function FieldCanvas() {
       }
     }
 
+    // Part 7 — density heatmap at medium zoom (structural light only).
+    function syncHeatmap(lod: number, murVis: number) {
+      const heatVis = THREE.MathUtils.clamp((lod - 0.12) / 0.55, 0, 1) * (1 - murVis * 0.55);
+      if (heatVis <= 0.01) {
+        heatmapMesh.visible = false;
+        return;
+      }
+      const canvas = densityField.rasterizeHeatmap();
+      heatTex.image = canvas;
+      heatTex.needsUpdate = true;
+      heatmapMesh.visible = true;
+      const mat = heatmapMesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.22 * heatVis;
+    }
+
     // 18.5 — Murmuration silhouettes at zoomed-out scale.
     function syncMurmuration(now: number, lod: number, dt: number) {
       const vis = murmurationVisibility(lod);
@@ -1323,10 +1367,11 @@ export function FieldCanvas() {
       if (vis <= 0.001) {
         for (const s of birdSprites) s.visible = false;
         for (const line of silhouetteLines.values()) line.visible = false;
+        for (const fill of silhouetteFills.values()) fill.mesh.visible = false;
         if (lod < 0.5) murmurationEmitted = false;
         return;
       }
-      if (vis > 0.2 && !murmurationEmitted) {
+      if (vis > 0.15 && !murmurationEmitted) {
         murmurationEmitted = true;
         emitFieldEvent("murmuration-visible");
       }
@@ -1339,28 +1384,62 @@ export function FieldCanvas() {
         activeClusterIds.add(cluster.id);
         const birds = murmurationField.birdPositions(cluster, nodes);
         const murmurActive = cluster.murmurUntil > now;
-        const flutter = murmurActive ? 1.25 : 1;
+        const flutter = murmurActive ? 1.45 : 1;
+        const resolveBoost = cluster.resolving ? 1.65 : 1;
 
         for (const b of birds) {
           if (birdIdx >= BIRD_POOL) break;
           const s = birdSprites[birdIdx++];
           s.visible = true;
-          s.position.set(b.x, b.y, -18);
-          const base = b.role === "ai_peripheral" ? 2.0 : 3.6;
-          s.scale.setScalar(base * flutter * (0.45 + vis * 0.75));
+          s.position.set(b.x, b.y, -17);
+          const base = b.role === "ai_peripheral" ? 5.5 : 8.5;
+          const wing = base * flutter * (0.55 + vis * 0.65);
+          s.scale.set(wing * 2.1, wing * 0.55, 1);
           const mat = s.material as THREE.SpriteMaterial;
           mat.color.copy(STRUCTURAL_LIGHT).multiplyScalar(
-            b.role === "ai_peripheral" ? 0.65 : 1.05
+            b.role === "ai_peripheral" ? 0.75 : 1.15 + cluster.coherence * 0.25
           );
-          mat.opacity = (b.role === "ai_peripheral" ? 0.18 : 0.42) * vis * flutter;
+          mat.opacity =
+            (b.role === "ai_peripheral" ? 0.28 : 0.55) * vis * flutter * resolveBoost;
         }
 
-        const contour = murmurationField.buildSilhouetteContour(cluster, nodes);
-        let line = silhouetteLines.get(cluster.id);
-        if (contour && contour.points.length >= 6) {
+        const visual = murmurationField.buildClusterVisual(cluster, nodes);
+        if (visual && visual.contour.length >= 6) {
+          let fill = silhouetteFills.get(cluster.id);
+          if (!fill) {
+            const tex = new THREE.CanvasTexture(visual.fillCanvas);
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
+            const fMat = new THREE.MeshBasicMaterial({
+              map: tex,
+              transparent: true,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+              opacity: 0.3,
+            });
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), fMat);
+            mesh.renderOrder = -2;
+            mesh.frustumCulled = false;
+            scene.add(mesh);
+            fill = { mesh, texture: tex };
+            silhouetteFills.set(cluster.id, fill);
+          }
+          fill.texture.image = visual.fillCanvas;
+          fill.texture.needsUpdate = true;
+          const { minX, minY, maxX, maxY } = visual.bounds;
+          const w = Math.max(40, maxX - minX);
+          const h = Math.max(40, maxY - minY);
+          fill.mesh.position.set((minX + maxX) / 2, (minY + maxY) / 2, -19);
+          fill.mesh.scale.set(w, h, 1);
+          fill.mesh.visible = true;
+          const fMat = fill.mesh.material as THREE.MeshBasicMaterial;
+          fMat.opacity =
+            (0.14 + cluster.coherence * 0.28) * vis * resolveBoost * (murmurActive ? 1.2 : 1);
+
+          let line = silhouetteLines.get(cluster.id);
           if (!line) {
             const geom = new THREE.BufferGeometry();
-            line = new THREE.Line(
+            line = new THREE.LineSegments(
               geom,
               new THREE.LineBasicMaterial({
                 color: STRUCTURAL_LIGHT.clone(),
@@ -1376,14 +1455,18 @@ export function FieldCanvas() {
           }
           line.visible = true;
           const geom = line.geometry as THREE.BufferGeometry;
-          geom.setAttribute("position", new THREE.BufferAttribute(contour.points, 3));
+          geom.setAttribute("position", new THREE.BufferAttribute(visual.contour, 3));
           geom.attributes.position.needsUpdate = true;
           const mat = line.material as THREE.LineBasicMaterial;
-          const resolveBoost = cluster.resolving ? 2.0 : 1;
-          mat.opacity = (0.1 + cluster.coherence * 0.32) * vis * resolveBoost;
-          mat.color.copy(STRUCTURAL_LIGHT).multiplyScalar(0.9 + cluster.coherence * 0.5 + (cluster.resolving ? 0.6 : 0));
-        } else if (line) {
-          line.visible = false;
+          mat.opacity = (0.18 + cluster.coherence * 0.42) * vis * resolveBoost;
+          mat.color
+            .copy(STRUCTURAL_LIGHT)
+            .multiplyScalar(1.0 + cluster.coherence * 0.55 + (cluster.resolving ? 0.75 : 0));
+        } else {
+          const line = silhouetteLines.get(cluster.id);
+          if (line) line.visible = false;
+          const fill = silhouetteFills.get(cluster.id);
+          if (fill) fill.mesh.visible = false;
         }
       }
 
@@ -1392,6 +1475,9 @@ export function FieldCanvas() {
       }
       for (const [id, line] of silhouetteLines) {
         if (!activeClusterIds.has(id)) line.visible = false;
+      }
+      for (const [id, fill] of silhouetteFills) {
+        if (!activeClusterIds.has(id)) fill.mesh.visible = false;
       }
     }
 
@@ -1680,7 +1766,7 @@ export function FieldCanvas() {
         const structural = filamentColor().multiplyScalar(
           0.35 + mainStrength * 1.25 + (f.isActive ? 0.2 : 0)
         );
-        tube.setAppearance(structural, (0.1 + mainStrength * 0.6) * g * intraFade);
+        tube.setAppearance(structural, (0.16 + mainStrength * 0.72) * g * intraFade);
       }
 
       // 18.3 — conduction pulses: one-shot vital light per traversal.
@@ -1862,8 +1948,10 @@ export function FieldCanvas() {
       camera.position.z = z;
       camera.lookAt(0, 0, 0);
 
-      // Part 7 density field — rebuilt continuously for trail + future heatmap.
+      // Part 7 density field — trail brightness + zoomed-out heatmap substrate.
       densityField.rebuild(nodesRef.current);
+      const lodEarly = THREE.MathUtils.clamp((camera.position.z - 420) / (1200 - 420), 0, 1);
+      syncHeatmap(lodEarly, murmurationVisibility(lodEarly));
 
       // Cursor trail — brightness and linger scale with local fragment density.
       while (trail.length && now - trail[0].born > TRAIL_LIFE * 1.35) trail.shift();
@@ -2371,6 +2459,7 @@ export function FieldCanvas() {
         negativeMarks.push(...g.negative);
         negDirty = true;
       }
+      setTools(mergeBuiltinTools([]));
     }
 
     function clearGuest() {
@@ -2517,8 +2606,11 @@ export function FieldCanvas() {
         const nb = f.sourceId === id ? f.targetId : f.targetId === id ? f.sourceId : null;
         if (nb) propagateBloom(nb, amount * 0.5, hop + 1, ctx);
       }
-      if (isRoot && ctx.points.length > 0) {
-        pendingSettles.push({ startedAt: performance.now(), points: [...ctx.points] });
+      if (isRoot) {
+        murmurationField.triggerMurmurForMembers([id]);
+        if (ctx.points.length > 0) {
+          pendingSettles.push({ startedAt: performance.now(), points: [...ctx.points] });
+        }
       }
     }
 
@@ -3385,7 +3477,7 @@ export function FieldCanvas() {
           const td = await tr.json();
           if (Array.isArray(td.tools)) {
             userTools.push(...td.tools);
-            setTools(td.tools);
+            setTools(mergeBuiltinTools(td.tools));
           }
         }
       } catch {
@@ -3452,6 +3544,15 @@ export function FieldCanvas() {
         line.geometry.dispose();
         (line.material as THREE.Material).dispose();
       }
+      for (const fill of silhouetteFills.values()) {
+        scene.remove(fill.mesh);
+        fill.mesh.geometry.dispose();
+        fill.texture.dispose();
+        (fill.mesh.material as THREE.Material).dispose();
+      }
+      heatmapMesh.geometry.dispose();
+      heatTex.dispose();
+      (heatmapMesh.material as THREE.Material).dispose();
       for (const s of trailSprites) (s.material as THREE.Material).dispose();
       for (const s of settleSprites) (s.material as THREE.Material).dispose();
       negGeom.dispose();
@@ -3509,6 +3610,7 @@ export function FieldCanvas() {
     if (e.key === "Enter") finishTyping();
     if (e.key === "Escape") {
       apiRef.current?.crystallize(""); // released without committing → negative space
+      emitFieldEvent("negative-space");
       setTyping(false);
       setPartial("");
       if (hiddenInputRef.current) hiddenInputRef.current.value = "";
@@ -3527,7 +3629,7 @@ export function FieldCanvas() {
     <div className="fixed inset-0">
       <div ref={mountRef} className="absolute inset-0" />
       <div ref={labelLayerRef} className="pointer-events-none absolute inset-0 z-10" />
-      <div ref={glyphLayerRef} className="pointer-events-none absolute inset-0 z-20" />
+      <div ref={glyphLayerRef} className="pointer-events-none absolute inset-0 z-[90]" />
 
       {/* The opening — utter darkness dissolving into the void */}
       <div
@@ -3554,7 +3656,7 @@ export function FieldCanvas() {
       <button
         onClick={onOrbClick}
         aria-label="thought input"
-        className="group absolute bottom-10 left-1/2 z-30 -translate-x-1/2 cursor-pointer border-0 bg-transparent p-6"
+        className="group absolute bottom-10 left-1/2 z-[90] -translate-x-1/2 cursor-pointer border-0 bg-transparent p-6"
       >
         <span
           className={`block h-3 w-3 rounded-full bg-[rgba(160,200,235,0.9)] shadow-[0_0_20px_8px_rgba(120,180,230,0.45)] ${
@@ -3574,7 +3676,7 @@ export function FieldCanvas() {
         onChange={onTypeInput}
         onKeyDown={onTypeKey}
         onBlur={() => typing && finishTyping()}
-        className="absolute bottom-24 left-1/2 z-30 w-[min(80vw,32rem)] -translate-x-1/2 border-0 border-b border-[rgba(150,190,220,0.2)] bg-transparent text-center text-base font-light text-[rgba(200,220,240,0.7)] outline-none placeholder:text-[rgba(150,180,210,0.25)]"
+        className="absolute bottom-24 left-1/2 z-[90] w-[min(80vw,32rem)] -translate-x-1/2 border-0 border-b border-[rgba(150,190,220,0.2)] bg-transparent text-center text-base font-light text-[rgba(200,220,240,0.7)] outline-none placeholder:text-[rgba(150,180,210,0.25)]"
         placeholder="type your thought, then press Enter"
         style={{ display: typing ? "block" : "none" }}
         autoComplete="off"
@@ -3602,7 +3704,7 @@ export function FieldCanvas() {
           draft={pageDraft}
           threadAvgPosition={threadAvgPos}
           sessionId={sessionIdRef.current}
-          tools={tools}
+          tools={mergeBuiltinTools(tools)}
           onClose={() => {
             setPageDraft(null);
             emitFieldEvent("page-close");

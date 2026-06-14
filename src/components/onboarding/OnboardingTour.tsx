@@ -24,7 +24,7 @@ interface Step {
   observe?: boolean;
 }
 
-const WAIT_TIMEOUT_MS = 20_000;
+const WAIT_TIMEOUT_MS = 15_000;
 
 const STEPS: Step[] = [
   // —— Arrival ——
@@ -32,26 +32,17 @@ const STEPS: Step[] = [
     id: "welcome",
     section: "Arrival",
     title: "You are in the dark",
-    body: "This is not a notes app. It is a living field — a cognitive medium where unformed thought can exist before it becomes a sentence. The opening fade is deliberate: you arrive in utter darkness, then the void reveals itself.",
+    body: "This is not a notes app. It is a living field — a cognitive medium where unformed thought can exist before it becomes a sentence. The opening fade is deliberate: you arrive in utter darkness, then the void reveals itself. The field below is fully interactive — click through the dim.",
     spotlight: "center",
     observe: true,
   },
   {
-    id: "voice",
+    id: "capture",
     section: "Capture",
-    title: "Speak into the orb",
-    body: "The faint glow at the bottom is the only chrome. Click it and speak — raw, unedited, false starts welcome. Deepgram transcribes live; prosody (pace, trailing off) becomes texture on the fragment.",
-    hint: "Click the orb and say something aloud.",
-    waitFor: "voice-start",
-    spotlight: "orb",
-  },
-  {
-    id: "type",
-    section: "Capture",
-    title: "Or type instead",
-    body: "No microphone? The orb falls back to typing. A hidden line appears; press Enter to crystallize, Escape to release without committing.",
-    hint: "If voice is blocked, click the orb again to type.",
-    waitFor: "type-start",
+    title: "Speak or type into the orb",
+    body: "The glow at the bottom is the only chrome. Click it to speak (Deepgram transcribes live). No mic? Click again — it falls back to typing. Press Enter to crystallize.",
+    hint: "Click the orb — speak, or type if prompted.",
+    waitFor: ["voice-start", "type-start"],
     spotlight: "orb",
   },
   {
@@ -434,9 +425,17 @@ export function OnboardingTour() {
 
   useEffect(() => {
     if (isOnboardingComplete()) return;
-    const t = setTimeout(() => setActive(true), 2800);
+    const t = setTimeout(() => setActive(true), 3200);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (active) {
+      document.body.classList.add("ct-tour-active");
+      return () => document.body.classList.remove("ct-tour-active");
+    }
+    document.body.classList.remove("ct-tour-active");
+  }, [active]);
 
   const current = STEPS[step];
 
@@ -486,6 +485,7 @@ export function OnboardingTour() {
       try {
         localStorage.removeItem(ONBOARDING_KEY);
         localStorage.removeItem("ct-onboarding-complete-v1");
+        localStorage.removeItem("ct-onboarding-complete-v2");
       } catch {
         /* ignore */
       }
@@ -521,12 +521,10 @@ export function OnboardingTour() {
   return (
     <div className="onboarding-root fixed inset-0 z-[100] pointer-events-none">
       {celebrate && <CelebrationBurst />}
-      <div
-        className={`onboarding-dim pointer-events-auto ${spotlightClass}`}
-        onClick={(e) => e.stopPropagation()}
-      />
+      {/* Visual dim only — must NOT capture pointer events or the field is dead */}
+      <div className={`onboarding-dim pointer-events-none ${spotlightClass}`} />
 
-      <div className="pointer-events-auto absolute bottom-[7.5rem] left-1/2 z-[101] w-[min(92vw,28rem)] -translate-x-1/2">
+      <div className="pointer-events-auto absolute left-1/2 top-3 z-[120] w-[min(92vw,26rem)] -translate-x-1/2">
         <div
           className="onboarding-card max-h-[min(52vh,22rem)] overflow-y-auto rounded-lg border border-[rgba(150,190,220,0.15)] px-6 py-5 shadow-[0_8px_40px_rgba(0,0,0,0.5)]"
           style={{
@@ -560,7 +558,7 @@ export function OnboardingTour() {
           )}
           {waiting && !waitTimedOut && !current.observe && (
             <p className="mb-3 text-[11px] font-light text-[rgba(120,160,200,0.4)]">
-              Do the gesture in the field — skip step or wait ~20s to continue.
+              Try the gesture in the field below — the orb and canvas are clickable. Use skip step anytime.
             </p>
           )}
           <div className="flex items-center justify-between gap-3">
@@ -578,10 +576,7 @@ export function OnboardingTour() {
               {waiting && !waitTimedOut && !current.observe && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setWaiting(false);
-                    setWaitTimedOut(true);
-                  }}
+                  onClick={advance}
                   className="rounded-full border border-[rgba(120,150,180,0.2)] bg-transparent px-4 py-2 text-[11px] font-light text-[rgba(160,190,220,0.55)] hover:border-[rgba(150,190,220,0.35)]"
                 >
                   skip step
