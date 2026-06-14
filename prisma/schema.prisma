@@ -14,7 +14,10 @@ model Session {
   startedAt      DateTime @default(now())
   endedAt        DateTime?
   claudeProcessed Boolean @default(false)
+  // Compressed final field state for cross-session palimpsest rendering.
+  fieldSnapshot  Json?
   thoughts       Thought[]
+  threads        Thread[]
 
   @@index([userId])
 }
@@ -40,8 +43,23 @@ model Thought {
   embeddingJson   String?  // Claude-computed vector
   isSynthesis     Boolean  @default(false)
   sourceThoughtIds String? // JSON array
+  // Voice-quality derived properties (null for typed input).
+  colorTemp        Float?  // 0 = cool blue, 1 = warm amber
+  inputVelocity    Float?  // words/sec for the phrase
+  inputAcceleration Float? // variance in word timing (smooth vs jerky)
+  // Attention / confidence accounting.
+  attentionCount  Int      @default(1)
+  lastAttendedAt  DateTime @default(now())
+  wasAbandoned    Boolean  @default(false)
+  // Provenance & modality.
+  origin           String  @default("user") // user | ai_expansion | ai_disturb | ai_implicit
+  parentFragmentId String?
+  contentType      String  @default("type")  // voice | type | sketch
+  sketchPath       String? // SVG-ish stroke point data for sketch fragments
+  inDraft          Boolean @default(false) // crossed into a shaped page piece
   sessionId       String?
   session         Session? @relation(fields: [sessionId], references: [id])
+  threadFragments ThreadFragment[]
   filamentsFrom   Filament[] @relation("FilamentSource")
   filamentsTo     Filament[] @relation("FilamentTarget")
 
@@ -54,6 +72,8 @@ model Filament {
   sourceId        String
   targetId        String
   strength        Float    @default(0.1)
+  // 18.3 — myelination: 0 = slow visible pulse (~1.5s), 1 = near-instant flash.
+  conductionSpeed Float    @default(0.1)
   type            String   @default("resonance") // resonance | tension | echo | temporal
   ageSessions     Int      @default(0)
   isActive        Boolean  @default(true)
@@ -64,11 +84,90 @@ model Filament {
   @@index([userId])
 }
 
+// User-defined workbench tools (Branch and Reflect ship as builtins).
+model Tool {
+  id             String   @id @default(uuid())
+  userId         String
+  instruction    String
+  glyphPath      String?  // closed-curve point data for the glyph shape
+  mass           Float    @default(0.6)
+  opacity        Float    @default(0.6)
+  attentionCount Int      @default(1)
+  lastUsedAt     DateTime @default(now())
+  isBuiltin      Boolean  @default(false)
+  builtinKind    String?  // branch | reflect
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Traced paths through the field (Part 17.2).
+model Thread {
+  id        String   @id @default(uuid())
+  sessionId String
+  userId    String
+  createdAt DateTime @default(now())
+  session   Session  @relation(fields: [sessionId], references: [id])
+  fragments ThreadFragment[]
+  drafts    Draft[]
+
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model ThreadFragment {
+  threadId      String
+  fragmentId    String
+  sequenceOrder Int
+  thread        Thread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  fragment      Thought @relation(fields: [fragmentId], references: [id], onDelete: Cascade)
+
+  @@id([threadId, sequenceOrder])
+  @@index([fragmentId])
+}
+
+// Legibility output — shaped linear text from a thread (Part 17.3).
+model Draft {
+  id        String   @id @default(uuid())
+  threadId  String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  thread    Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([threadId])
+}
+
 model FieldState {
   id                  String   @id @default(uuid())
   userId              String   @unique
   ontologySignature   String   @default("{}")
   updatedAt           DateTime @updatedAt
+}
+
+// Negative space — things approached but not said (abandoned partials).
+model NegativeSpace {
+  id             String   @id @default(uuid())
+  userId         String
+  sessionId      String?
+  posX           Float
+  posY           Float
+  partialContent String?
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Long-term per-user learned parameters (populated in a later phase).
+model CognitiveSignature {
+  userId               String   @id
+  avgIncubationSeconds Float?
+  circlingPattern      Json?
+  disturbTimingOffset  Float?
+  updatedAt            DateTime @updatedAt
 }
 
 model ClaudeJob {

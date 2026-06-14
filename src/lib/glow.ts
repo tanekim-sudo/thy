@@ -66,26 +66,80 @@ export function hueShift(color: THREE.Color, shift: number): THREE.Color {
   return color.setHSL(hsl.h, hsl.s, hsl.l);
 }
 
-/** Color of a node by its charge and state. Cool for resonant, warm for tension. */
-export function nodeColor(charge: number, isSynthesis: boolean): THREE.Color {
-  if (isSynthesis) return new THREE.Color(0.85, 0.92, 1.0);
-  // charge -1 (tension, warm) .. +1 (resonant, cool blue)
-  const warm = new THREE.Color(0.95, 0.62, 0.42);
-  const cool = new THREE.Color(0.5, 0.72, 0.95);
-  const neutral = new THREE.Color(0.62, 0.74, 0.86);
-  if (charge >= 0) return neutral.clone().lerp(cool, Math.min(1, charge));
-  return neutral.clone().lerp(warm, Math.min(1, -charge));
+// ---- 18.1 — The two lights -------------------------------------------------
+// There are exactly two lights in this universe and never a third hue. Every
+// fragment, connection and pulse is some blend of these. Provenance and meaning
+// are carried by shape, texture and intensity — never by colour.
+
+/**
+ * STRUCTURAL light — cool, desaturated white-blue-violet (#c9def0). The colour
+ * of what *exists*: dormant fragment glow, connections at rest, the palimpsest,
+ * the cosmic web. At full intensity it is this colour; it scales down toward the
+ * base field colour (#0a0a0f) as intensity drops.
+ */
+export const STRUCTURAL_LIGHT = new THREE.Color(0.788, 0.871, 0.941); // #c9def0
+
+/** The base field colour structural light decays toward. */
+export const BASE_FIELD = new THREE.Color(0.039, 0.039, 0.059); // #0a0a0f
+
+/**
+ * VITAL light — cyan-teal-green, ranging warm→cool (#4dffc4 → #2dd4bf). The
+ * colour of what is *happening*: a fragment in the moment of its creation, the
+ * synaptic pulse along a firing connection, the bioluminescent response to
+ * touch, the flock of currently-attended fragments.
+ */
+export const VITAL_WARM = new THREE.Color(0.302, 1.0, 0.769); // #4dffc4
+export const VITAL_COOL = new THREE.Color(0.176, 0.831, 0.749); // #2dd4bf
+
+/**
+ * Vital light at a given intensity. Freshest events sit at the warm end of the
+ * vital range and settle toward the cool end as the instant passes.
+ */
+export function vitalColor(t = 1): THREE.Color {
+  return VITAL_COOL.clone().lerp(VITAL_WARM, Math.max(0, Math.min(1, t)));
 }
 
-export function filamentColor(type: string): THREE.Color {
-  switch (type) {
-    case "tension":
-      return new THREE.Color(0.95, 0.55, 0.4);
-    case "echo":
-      return new THREE.Color(0.72, 0.6, 0.95);
-    case "temporal":
-      return new THREE.Color(0.55, 0.85, 0.7);
-    default:
-      return new THREE.Color(0.55, 0.72, 0.92);
-  }
+/**
+ * A fragment's colour is the single blend the whole medium is built on: pure
+ * vital light in the moment of being thought, cooling to pure structural light
+ * as it settles into the field. `vitality` is 0 (settled / structural) → 1
+ * (just-happened / vital). Brightness is applied separately by the caller via
+ * opacity and HDR multipliers, so this returns only the hue blend.
+ */
+export function fragmentColor(vitality: number): THREE.Color {
+  const v = Math.max(0, Math.min(1, vitality));
+  return STRUCTURAL_LIGHT.clone().lerp(vitalColor(v), v);
+}
+
+/**
+ * How "vital" a fragment is right now: high at the instant of creation (and
+ * while still crystallizing), again briefly each time attention returns, then
+ * decaying back to structural. Caller may add transient bursts on top.
+ */
+export function fragmentVitality(
+  node: {
+    timestamp: number;
+    lastAttendedAt?: number;
+    crystallizing?: number;
+  },
+  nowMs: number
+): number {
+  // Still materializing → still being thought.
+  const creating = node.crystallizing != null ? 1 - Math.min(1, node.crystallizing) : 0;
+  // Recently spoken into being.
+  const born = Math.exp(-(nowMs - node.timestamp) / 4000);
+  // Recently returned to.
+  const attended = node.lastAttendedAt
+    ? Math.exp(-(nowMs - node.lastAttendedAt) / 2600) * 0.7
+    : 0;
+  return Math.min(1, Math.max(creating, born, attended));
+}
+
+/**
+ * Connections render in structural light, regardless of their semantic type
+ * (18.1: provenance and meaning are never colour). Type and strength are
+ * expressed through shape, micro-branching and intensity instead.
+ */
+export function filamentColor(): THREE.Color {
+  return STRUCTURAL_LIGHT.clone();
 }

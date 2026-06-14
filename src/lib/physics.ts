@@ -7,11 +7,38 @@ const CHARGE_FORCE = 0.00002;
 const SEMANTIC_PULL = 0.00004;
 const VOID_RADIUS = 40;
 
+// Boids / murmuration. Structured so a second mind's fragments can later join
+// the same flock calculation and coherent collaborative motion emerges for free.
+const FLOCK_RADIUS = 170;
+const ALIGN_WEIGHT = 0.014; // steer toward neighbours' average heading
+const SEPARATION_DIST = 26;
+const SEPARATION_FORCE = 0.0016;
+
+// Opacity-as-confidence: unattended fragments fade slowly toward a floor —
+// never to nothing ("you never delete anything"). Tuned to be felt across
+// long stretches, not within a normal session.
+const LUM_DECAY = 0.0000006;
+const LUM_FLOOR = 0.08;
+
+// Field breathing: during silence, recent fragments drift gently together.
+const BREATH_PULL = 0.0006;
+
+// Weak pull toward an interpretation-layer semantic drift target.
+const DRIFT_TARGET_PULL = 0.00018;
+
+export interface StepOptions {
+  /** Fragment ids currently "settling like sediment" during silence. */
+  breathingIds?: Set<string>;
+  /** Once the implicit question is attended, the center may hold content. */
+  voidLifted?: boolean;
+}
+
 export function stepPhysics(
   nodes: ThoughtNode[],
   filaments: FilamentEdge[],
   energy: "drift" | "turbulence",
-  dt: number
+  dt: number,
+  opts: StepOptions = {}
 ): ThoughtNode[] {
   const turbulence = energy === "turbulence" ? 1.8 : 1;
   const next = nodes.map((n) => ({
@@ -19,6 +46,30 @@ export function stepPhysics(
     velocity: [...n.velocity] as [number, number, number],
     position: [...n.position] as [number, number, number],
   }));
+
+  const posById = new Map<string, [number, number, number]>();
+  for (const n of next) posById.set(n.id, n.position);
+
+  // Centroid of the breathing set (sediment settling during stillness).
+  let bcx = 0;
+  let bcy = 0;
+  let bcz = 0;
+  let bcount = 0;
+  if (opts.breathingIds && opts.breathingIds.size > 0) {
+    for (const n of next) {
+      if (opts.breathingIds.has(n.id)) {
+        bcx += n.position[0];
+        bcy += n.position[1];
+        bcz += n.position[2];
+        bcount++;
+      }
+    }
+    if (bcount > 0) {
+      bcx /= bcount;
+      bcy /= bcount;
+      bcz /= bcount;
+    }
+  }
 
   for (const node of next) {
     if (node.crystallizing !== undefined && node.crystallizing < 1) continue;
@@ -30,13 +81,20 @@ export function stepPhysics(
     const [x, y, z] = node.position;
     const distFromCenter = Math.sqrt(x * x + y * y + z * z);
 
-    // Alexander's void — center repels
-    if (distFromCenter < VOID_RADIUS && distFromCenter > 0.01) {
+    // Alexander's void — center repels. The implicit-question fragment (noDecay)
+    // is exempt, and once it's attended the repulsion lifts for the session.
+    if (!node.noDecay && !opts.voidLifted && distFromCenter < VOID_RADIUS && distFromCenter > 0.01) {
       const repulse = CENTER_REPULSION * (1 - distFromCenter / VOID_RADIUS);
       fx += (x / distFromCenter) * repulse;
       fy += (y / distFromCenter) * repulse;
       fz += (z / distFromCenter) * repulse;
     }
+
+    // Boids accumulators.
+    let avgVx = 0;
+    let avgVy = 0;
+    let avgVz = 0;
+    let flockCount = 0;
 
     for (const other of next) {
       if (other.id === node.id) continue;
@@ -79,27 +137,74 @@ export function stepPhysics(
           fz -= (dz / dist) * push;
         }
       }
+
+      // Boids: within the flock radius, gather neighbours for alignment and
+      // push apart when crowding (separation).
+      if (dist < FLOCK_RADIUS) {
+        avgVx += other.velocity[0];
+        avgVy += other.velocity[1];
+        avgVz += other.velocity[2];
+        flockCount++;
+        if (dist < SEPARATION_DIST) {
+          const sep = SEPARATION_FORCE * (1 - dist / SEPARATION_DIST);
+          fx -= (dx / dist) * sep;
+          fy -= (dy / dist) * sep;
+          fz -= (dz / dist) * sep;
+        }
+      }
+    }
+
+    // Breathing: settle toward the recent-cluster centroid during silence.
+    if (bcount > 0 && opts.breathingIds!.has(node.id)) {
+      fx += (bcx - x) * BREATH_PULL;
+      fy += (bcy - y) * BREATH_PULL;
+      fz += (bcz - z) * BREATH_PULL;
+    }
+
+    // Semantic drift toward an interpretation-layer target (very low weight).
+    if (node.driftTargetId) {
+      const tp = posById.get(node.driftTargetId);
+      if (tp) {
+        fx += (tp[0] - x) * DRIFT_TARGET_PULL;
+        fy += (tp[1] - y) * DRIFT_TARGET_PULL;
+        fz += (tp[2] - z) * DRIFT_TARGET_PULL;
+      }
     }
 
     fx *= turbulence;
     fy *= turbulence;
     fz *= turbulence;
 
-    node.velocity[0] = (node.velocity[0] + fx * dt) * DAMPING;
-    node.velocity[1] = (node.velocity[1] + fy * dt) * DAMPING;
-    node.velocity[2] = (node.velocity[2] + fz * dt) * DAMPING;
+    let vx = (node.velocity[0] + fx * dt) * DAMPING;
+    let vy = (node.velocity[1] + fy * dt) * DAMPING;
+    let vz = (node.velocity[2] + fz * dt) * DAMPING;
 
-    node.position[0] += node.velocity[0] * dt;
-    node.position[1] += node.velocity[1] * dt;
-    node.position[2] += node.velocity[2] * dt;
+    // Alignment: steer a little toward the flock's average heading.
+    if (flockCount > 0) {
+      avgVx /= flockCount;
+      avgVy /= flockCount;
+      avgVz /= flockCount;
+      vx += (avgVx - vx) * ALIGN_WEIGHT * dt;
+      vy += (avgVy - vy) * ALIGN_WEIGHT * dt;
+      vz += (avgVz - vz) * ALIGN_WEIGHT * dt;
+    }
 
-    // Recency + mass → luminosity
-    const ageDays = (Date.now() - node.timestamp) / 86400000;
-    const recency = Math.exp(-ageDays / 14);
-    node.luminosity = Math.min(1, 0.2 + recency * 0.4 + node.mass * 0.05 + node.returnCount * 0.03);
+    node.velocity[0] = vx;
+    node.velocity[1] = vy;
+    node.velocity[2] = vz;
+
+    node.position[0] += vx * dt;
+    node.position[1] += vy * dt;
+    node.position[2] += vz * dt;
+
+    // Confidence decays slowly toward the floor when attention doesn't return.
+    // The implicit-question fragment (noDecay) holds its faint presence.
+    if (!node.noDecay) {
+      node.luminosity = Math.max(LUM_FLOOR, node.luminosity - LUM_DECAY * dt);
+    }
   }
 
-  // Grow filaments in background
+  // Grow filaments in background; dormant connections slowly thin.
   for (const f of filaments) {
     if (f.growth < 1) f.growth = Math.min(1, f.growth + dt * 0.08);
     if (!f.isActive) f.strength = Math.max(0.05, f.strength - dt * 0.001);

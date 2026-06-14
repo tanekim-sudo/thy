@@ -69,6 +69,7 @@ export async function POST(req: NextRequest) {
     sourceId: string;
     targetId: string;
     strength: number;
+    conductionSpeed: number;
     type: string;
   }[] = [];
 
@@ -89,15 +90,34 @@ export async function POST(req: NextRequest) {
     if (existing) {
       const f = await prisma.filament.update({
         where: { id: existing.id },
-        data: { strength: Math.min(1, existing.strength + strength * 0.5), traffic: existing.traffic + 1, isActive: true },
+        data: {
+          strength: Math.min(1, existing.strength + strength * 0.5),
+          conductionSpeed: Math.min(1, existing.conductionSpeed + 0.05),
+          traffic: existing.traffic + 1,
+          isActive: true,
+        },
       });
-      created.push({ id: f.id, sourceId: f.sourceId, targetId: f.targetId, strength: f.strength, type: f.type });
+      created.push({
+        id: f.id,
+        sourceId: f.sourceId,
+        targetId: f.targetId,
+        strength: f.strength,
+        conductionSpeed: f.conductionSpeed,
+        type: f.type,
+      });
       return;
     }
     const f = await prisma.filament.create({
       data: { userId, sourceId: thoughtId, targetId, strength, type, traffic: 1 },
     });
-    created.push({ id: f.id, sourceId: f.sourceId, targetId: f.targetId, strength: f.strength, type: f.type });
+    created.push({
+      id: f.id,
+      sourceId: f.sourceId,
+      targetId: f.targetId,
+      strength: f.strength,
+      conductionSpeed: f.conductionSpeed,
+      type: f.type,
+    });
   };
 
   for (const r of result.resonances) if (r.strength > 0.25) await link(r.thoughtId, r.strength, "resonance");

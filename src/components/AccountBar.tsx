@@ -52,6 +52,13 @@ export function AccountBar() {
           >
             sign out
           </button>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new Event("ct:restart-onboarding"))}
+            className="text-[rgba(150,180,210,0.35)] underline-offset-4 transition-colors hover:text-[rgba(200,220,240,0.7)] hover:underline"
+          >
+            tour
+          </button>
         </>
       ) : (
         <>
@@ -70,6 +77,13 @@ export function AccountBar() {
           >
             sign up
           </Link>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new Event("ct:restart-onboarding"))}
+            className="text-[rgba(150,180,210,0.35)] underline-offset-4 transition-colors hover:text-[rgba(200,220,240,0.7)] hover:underline"
+          >
+            tour
+          </button>
         </>
       )}
     </div>

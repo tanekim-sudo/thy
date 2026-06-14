@@ -19,16 +19,64 @@ body {
   position: relative;
 }
 
-/* Film grain — void is alive, not empty */
+/* Film grain — the sensor noise astronomers see in deep-sky images.
+   Not decoration: it makes the dark feel inhabited rather than empty.
+   Oversized and drifting so the grain shimmers and never shows an edge. */
 body::after {
   content: "";
   position: fixed;
-  inset: 0;
+  top: -100%;
+  left: -100%;
+  width: 300%;
+  height: 300%;
   pointer-events: none;
   z-index: 100;
-  opacity: 0.035;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 180px 180px;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  animation: grain 0.7s steps(6) infinite;
+  will-change: transform;
+}
+
+@keyframes grain {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  10% {
+    transform: translate(-4%, -6%);
+  }
+  20% {
+    transform: translate(-9%, 4%);
+  }
+  30% {
+    transform: translate(5%, -11%);
+  }
+  40% {
+    transform: translate(-4%, 12%);
+  }
+  50% {
+    transform: translate(-9%, 6%);
+  }
+  60% {
+    transform: translate(8%, 0%);
+  }
+  70% {
+    transform: translate(0%, 8%);
+  }
+  80% {
+    transform: translate(4%, 11%);
+  }
+  90% {
+    transform: translate(-6%, 5%);
+  }
+}
+
+/* Respect a still mind — hold the grain steady if motion is reduced. */
+@media (prefers-reduced-motion: reduce) {
+  body::after {
+    animation: none;
+  }
 }
 
 @keyframes orb-pulse {
@@ -45,4 +93,95 @@ body::after {
 
 .orb-pulse {
   animation: orb-pulse 4s ease-in-out infinite;
+}
+
+/* Onboarding — spotlight cutouts over the void */
+.onboarding-root {
+  z-index: 100;
+}
+
+.onboarding-dim {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 5, 10, 0.72);
+  backdrop-filter: blur(1px);
+}
+
+.onboarding-spotlight-orb {
+  mask-image: radial-gradient(
+    circle 72px at 50% calc(100% - 4.5rem),
+    transparent 0,
+    transparent 68px,
+    black 72px
+  );
+  -webkit-mask-image: radial-gradient(
+    circle 72px at 50% calc(100% - 4.5rem),
+    transparent 0,
+    transparent 68px,
+    black 72px
+  );
+}
+
+.onboarding-spotlight-center {
+  mask-image: radial-gradient(ellipse 55% 42% at 50% 48%, transparent 0, black 100%);
+  -webkit-mask-image: radial-gradient(ellipse 55% 42% at 50% 48%, transparent 0, black 100%);
+}
+
+.onboarding-spotlight-top {
+  mask-image: radial-gradient(ellipse 40% 22% at 88% 6%, transparent 0, black 100%);
+  -webkit-mask-image: radial-gradient(ellipse 40% 22% at 88% 6%, transparent 0, black 100%);
+}
+
+.onboarding-spotlight-page {
+  mask-image: radial-gradient(ellipse 70% 55% at 50% 46%, transparent 0, transparent 42%, black 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 55% at 50% 46%, transparent 0, transparent 42%, black 100%);
+}
+
+.onboarding-card {
+  animation: onboarding-card-in 0.45s ease-out;
+}
+
+.onboarding-hint {
+  animation: onboarding-hint-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes onboarding-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes onboarding-hint-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+.onboarding-particle {
+  position: absolute;
+  bottom: 30%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  animation: onboarding-particle-rise 1.2s ease-out forwards;
+}
+
+@keyframes onboarding-particle-rise {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-120px) scale(0.3);
+  }
 }
