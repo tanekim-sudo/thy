@@ -336,7 +336,7 @@ export function FieldCanvas() {
     const BLOOM_DURATION = 1500;
     const SETTLE_LIFE_MIN = 10000;
     const SETTLE_LIFE_MAX = 15000;
-    const SETTLE_MAX_OPACITY = 0.08;
+    const SETTLE_MAX_OPACITY = 0.095;
     const SETTLE_POOL = 72;
 
     const densityField = new DensityField();
@@ -1972,7 +1972,7 @@ export function FieldCanvas() {
         s.scale.setScalar((5 + k * 14) * (0.5 + dScale * 0.75));
         const tMat = s.material as THREE.SpriteMaterial;
         tMat.color.copy(vitalColor(0.25 + density * 0.55));
-        tMat.opacity = k * k * 0.34 * dScale;
+        tMat.opacity = k * k * 0.42 * dScale;
       }
 
       // Settling residuals — bay calming down after bloom propagation.
